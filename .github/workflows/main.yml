@@ -31,18 +31,12 @@ on:
         - slideshow
         - animated_text
         - ken_burns
-        - ai_generated
         default: 'animated_text'
-      background_music:
-        description: 'Add background music'
-        required: false
-        type: boolean
-        default: true
 
 jobs:
   generate-video:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 15
     
     steps:
     - name: Checkout repository
@@ -52,30 +46,28 @@ jobs:
       uses: actions/setup-python@v4
       with:
         python-version: '3.10'
-        cache: 'pip'
         
     - name: Install system dependencies
       run: |
         sudo apt-get update
-        sudo apt-get install -y ffmpeg libsm6 libxext6
-        sudo apt-get install -y imagemagick
-        # Allow ImageMagick for PDF/text processing
-        sudo sed -i 's/rights="none" pattern="PDF"/rights="read | write" pattern="PDF"/' /etc/ImageMagick-6/policy.xml
-        
-    - name: Install Python packages
+        sudo apt-get install -y ffmpeg
+        sudo apt-get install -y libsm6 libxext6 libgl1-mesa-glx
+        sudo apt-get install -y python3-tk
+      
+    - name: Install Python packages with compatible versions
       run: |
         python -m pip install --upgrade pip
         pip install opencv-python==4.8.1.78
         pip install Pillow==10.0.1
-        pip install moviepy==1.0.3
         pip install numpy==1.24.3
         pip install requests==2.31.0
-        pip install gtts==2.3.2
-        pip install pygame==2.5.0
-        pip install transformers==4.35.0
-        pip install torch==2.1.0 --index-url https://download.pytorch.org/whl/cpu
-        pip install diffusers==0.24.0
-        pip install accelerate==0.24.1
+        # Install moviepy without unnecessary dependencies
+        pip install moviepy==1.0.3 --no-deps
+        pip install decorator==5.1.1
+        pip install tqdm==4.66.1
+        pip install imageio==2.31.1
+        pip install imageio-ffmpeg==0.4.9
+        pip install proglog==0.1.10
         
     - name: Create video generation script
       run: |
@@ -85,13 +77,10 @@ jobs:
         import os
         import cv2
         import numpy as np
-        from PIL import Image, ImageDraw, ImageFont, ImageFilter
-        import moviepy.editor as mpy
-        from gtts import gTTS
-        import requests
-        from io import BytesIO
+        from PIL import Image, ImageDraw, ImageFont
         import textwrap
         import random
+        import subprocess
         
         class VideoGenerator:
             def __init__(self, width=1280, height=720):
@@ -131,10 +120,22 @@ jobs:
                     # Add some visual elements
                     self._add_visual_elements(draw, i)
                     
-                    # Try to load font, fallback to default
+                    # Try to load font (using default font)
                     try:
                         font_size = 40
-                        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size)
+                        # Try different font paths
+                        font_paths = [
+                            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+                            "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf"
+                        ]
+                        font = None
+                        for font_path in font_paths:
+                            if os.path.exists(font_path):
+                                font = ImageFont.truetype(font_path, font_size)
+                                break
+                        if font is None:
+                            font = ImageFont.load_default()
                     except:
                         font = ImageFont.load_default()
                     
@@ -143,13 +144,19 @@ jobs:
                     
                     # Draw each line of text
                     for j, line in enumerate(lines):
-                        bbox = draw.textbbox((0, 0), line, font=font)
-                        text_width = bbox[2] - bbox[0]
+                        try:
+                            bbox = draw.textbbox((0, 0), line, font=font)
+                            text_width = bbox[2] - bbox[0]
+                        except:
+                            # Fallback if textbbox fails
+                            text_width = len(line) * 20
+                        
                         x = (self.width - text_width) // 2
                         y = (self.height - len(lines) * 50) // 2 + j * 50 + y_offset
                         
                         # Text shadow
-                        draw.text((x+3, y+3), line, font=font, fill=(0, 0, 0, 128))
+                        shadow_color = (0, 0, 0)
+                        draw.text((x+3, y+3), line, font=font, fill=shadow_color)
                         # Main text with color gradient
                         text_color = (255, 255 - j*30, 100 + j*20)
                         draw.text((x, y), line, font=font, fill=text_color)
@@ -166,11 +173,15 @@ jobs:
                 frames = []
                 words = text_prompt.split()
                 
+                if not words:
+                    words = ["Text", "To", "Video"]
+                
                 # Create slides with different backgrounds
-                slide_duration = total_frames // min(5, len(words))
+                slides_needed = min(5, len(words))
+                slide_duration = total_frames // slides_needed if slides_needed > 0 else total_frames
                 
                 for i in range(total_frames):
-                    slide_num = i // slide_duration
+                    slide_num = i // slide_duration if slide_duration > 0 else 0
                     if slide_num >= len(words):
                         slide_num = len(words) - 1
                     
@@ -191,13 +202,29 @@ jobs:
                     self._add_slide_elements(draw, i, slide_num)
                     
                     try:
-                        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 60)
+                        font_size = 60
+                        font_paths = [
+                            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"
+                        ]
+                        font = None
+                        for font_path in font_paths:
+                            if os.path.exists(font_path):
+                                font = ImageFont.truetype(font_path, font_size)
+                                break
+                        if font is None:
+                            font = ImageFont.load_default()
                     except:
                         font = ImageFont.load_default()
                     
                     word = words[slide_num] if slide_num < len(words) else words[-1]
-                    bbox = draw.textbbox((0, 0), word, font=font)
-                    text_width = bbox[2] - bbox[0]
+                    
+                    try:
+                        bbox = draw.textbbox((0, 0), word, font=font)
+                        text_width = bbox[2] - bbox[0]
+                    except:
+                        text_width = len(word) * 30
+                    
                     x = (self.width - text_width) // 2
                     y = self.height // 2 - 30
                     
@@ -213,8 +240,8 @@ jobs:
                 total_frames = int(duration * self.fps)
                 frames = []
                 
-                # Generate or download background images
-                background_images = self._generate_background_images(text_prompt)
+                # Generate background images
+                background_images = self._generate_background_images()
                 
                 for i in range(total_frames):
                     # Select background image with Ken Burns effect
@@ -233,17 +260,30 @@ jobs:
                     lower = min(upper + int(self.height / zoom), bg_img.height)
                     
                     cropped = bg_img.crop((left, upper, right, lower))
-                    resized = cropped.resize((self.width, self.height), Image.Resampling.LANCZOS)
+                    resized = cropped.resize((self.width, self.height), Image.LANCZOS)
                     
                     draw = ImageDraw.Draw(resized)
                     
                     # Add semi-transparent overlay for better text visibility
                     overlay = Image.new('RGBA', (self.width, self.height), (0, 0, 0, 128))
-                    resized = Image.alpha_composite(resized.convert('RGBA'), overlay).convert('RGB')
-                    draw = ImageDraw.Draw(resized)
+                    resized_rgba = resized.convert('RGBA')
+                    combined = Image.alpha_composite(resized_rgba, overlay)
+                    final_img = combined.convert('RGB')
+                    draw = ImageDraw.Draw(final_img)
                     
                     try:
-                        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 48)
+                        font_size = 48
+                        font_paths = [
+                            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+                            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"
+                        ]
+                        font = None
+                        for font_path in font_paths:
+                            if os.path.exists(font_path):
+                                font = ImageFont.truetype(font_path, font_size)
+                                break
+                        if font is None:
+                            font = ImageFont.load_default()
                     except:
                         font = ImageFont.load_default()
                     
@@ -253,15 +293,21 @@ jobs:
                     
                     # Draw text
                     for j, line in enumerate(lines):
-                        bbox = draw.textbbox((0, 0), line, font=font)
-                        text_width = bbox[2] - bbox[0]
+                        try:
+                            bbox = draw.textbbox((0, 0), line, font=font)
+                            text_width = bbox[2] - bbox[0]
+                        except:
+                            text_width = len(line) * 25
+                        
                         x = (self.width - text_width) // 2
                         y = (self.height - len(lines) * 60) // 2 + j * 60
                         
+                        # Text shadow
                         draw.text((x+2, y+2), line, font=font, fill=(0, 0, 0))
+                        # Main text
                         draw.text((x, y), line, font=font, fill=(255, 255, 255))
                     
-                    frame = cv2.cvtColor(np.array(resized), cv2.COLOR_RGB2BGR)
+                    frame = cv2.cvtColor(np.array(final_img), cv2.COLOR_RGB2BGR)
                     frames.append(frame)
                 
                 return frames
@@ -275,9 +321,9 @@ jobs:
                     size = 20 + int(10 * np.sin(frame_num * 0.1 + i))
                     
                     color = (
-                        int(255 * np.sin(frame_num * 0.02 + i)),
-                        int(255 * np.sin(frame_num * 0.02 + i + 2)),
-                        int(255 * np.sin(frame_num * 0.02 + i + 4))
+                        int(255 * abs(np.sin(frame_num * 0.02 + i))),
+                        int(255 * abs(np.sin(frame_num * 0.02 + i + 2))),
+                        int(255 * abs(np.sin(frame_num * 0.02 + i + 4)))
                     )
                     
                     draw.ellipse([x, y, x+size, y+size], fill=color)
@@ -299,13 +345,13 @@ jobs:
                     y = int(self.height * 0.1 + 50 * np.cos(angle))
                     size = 30
                     
-                    draw.rectangle([x, y, x+size, y+size], fill=(255, 255, 255, 100))
+                    draw.rectangle([x, y, x+size, y+size], fill=(255, 255, 255))
             
-            def _generate_background_images(self, text_prompt):
-                """Generate background images based on text prompt"""
+            def _generate_background_images(self):
+                """Generate background images"""
                 images = []
                 
-                # Create gradient backgrounds based on text content
+                # Create gradient backgrounds
                 colors = [
                     (65, 105, 225),  # Royal Blue
                     (220, 20, 60),   # Crimson
@@ -315,219 +361,7 @@ jobs:
                 ]
                 
                 for color in colors:
+                    # Create larger image for Ken Burns effect
                     img = Image.new('RGB', (self.width * 2, self.height * 2), color=color)
                     
                     # Add some texture
-                    draw = ImageDraw.Draw(img)
-                    for i in range(100):
-                        x = random.randint(0, self.width * 2)
-                        y = random.randint(0, self.height * 2)
-                        radius = random.randint(10, 50)
-                        shade = random.randint(-30, 30)
-                        circle_color = (
-                            max(0, min(255, color[0] + shade)),
-                            max(0, min(255, color[1] + shade)),
-                            max(0, min(255, color[2] + shade))
-                        )
-                        draw.ellipse([x, y, x+radius, y+radius], fill=circle_color)
-                    
-                    images.append(img)
-                
-                return images
-            
-            def add_background_music(self, video_path, output_path):
-                """Add background music to video"""
-                try:
-                    # Download or generate background music
-                    # For demo, we'll create a silent audio track
-                    from moviepy.audio.io.AudioFileClip import AudioFileClip
-                    from moviepy.audio.AudioClip import AudioClip
-                    
-                    video = mpy.VideoFileClip(video_path)
-                    
-                    # Create silent audio (in real implementation, add proper music)
-                    silent_audio = AudioClip(lambda t: [0, 0], duration=video.duration)
-                    final_video = video.set_audio(silent_audio)
-                    
-                    final_video.write_videofile(
-                        output_path,
-                        codec='libx264',
-                        audio_codec='aac',
-                        temp_audiofile='temp-audio.m4a',
-                        remove_temp=True
-                    )
-                    
-                    video.close()
-                    final_video.close()
-                    return output_path
-                    
-                except Exception as e:
-                    print(f"Music addition failed: {e}")
-                    return video_path
-        
-        def main():
-            parser = argparse.ArgumentParser(description='Generate video from text')
-            parser.add_argument('--prompt', type=str, required=True)
-            parser.add_argument('--duration', type=int, default=10)
-            parser.add_argument('--resolution', type=str, default='1280x720')
-            parser.add_argument('--style', type=str, default='animated_text')
-            parser.add_argument('--background_music', type=bool, default=True)
-            
-            args = parser.parse_args()
-            
-            # Parse resolution
-            width, height = map(int, args.resolution.split('x'))
-            
-            # Create output directory
-            os.makedirs('output', exist_ok=True)
-            
-            # Initialize generator
-            generator = VideoGenerator(width, height)
-            
-            # Generate frames based on style
-            if args.style == 'slideshow':
-                frames = generator.create_slideshow_video(args.prompt, args.duration)
-            elif args.style == 'ken_burns':
-                frames = generator.create_ken_burns_video(args.prompt, args.duration)
-            else:  # animated_text
-                frames = generator.create_animated_text_video(args.prompt, args.duration)
-            
-            # Save video
-            temp_video_path = 'output/temp_video.mp4'
-            output_video_path = 'output/generated_video.mp4'
-            
-            # Create video from frames
-            out = cv2.VideoWriter(
-                temp_video_path,
-                cv2.VideoWriter_fourcc(*'mp4v'),
-                generator.fps,
-                (width, height)
-            )
-            
-            for frame in frames:
-                out.write(frame)
-            out.release()
-            
-            # Add background music if requested
-            if args.background_music:
-                generator.add_background_music(temp_video_path, output_video_path)
-                os.remove(temp_video_path)
-            else:
-                os.rename(temp_video_path, output_video_path)
-            
-            print(f"Video generated: {output_video_path}")
-            return output_video_path
-        
-        if __name__ == "__main__":
-            main()
-        EOF
-        
-    - name: Generate video from text
-      run: |
-        python generate_video.py \
-          --prompt "${{ github.event.inputs.text_prompt }}" \
-          --duration ${{ github.event.inputs.duration }} \
-          --resolution ${{ github.event.inputs.resolution }} \
-          --style ${{ github.event.inputs.style }} \
-          --background_music ${{ github.event.inputs.background_music }}
-          
-    - name: Optimize video size
-      run: |
-        ffmpeg -i output/generated_video.mp4 \
-          -vcodec libx264 \
-          -crf 23 \
-          -preset medium \
-          -acodec aac \
-          -b:a 128k \
-          output/optimized_video.mp4 -y
-          
-    - name: Create video thumbnail
-      run: |
-        ffmpeg -i output/optimized_video.mp4 \
-          -ss 00:00:02 \
-          -vframes 1 \
-          -q:v 2 \
-          output/thumbnail.jpg -y
-          
-    - name: Generate video info
-      run: |
-        echo "Video Generation Report" > output/video_info.txt
-        echo "=======================" >> output/video_info.txt
-        echo "Prompt: ${{ github.event.inputs.text_prompt }}" >> output/video_info.txt
-        echo "Duration: ${{ github.event.inputs.duration }} seconds" >> output/video_info.txt
-        echo "Resolution: ${{ github.event.inputs.resolution }}" >> output/video_info.txt
-        echo "Style: ${{ github.event.inputs.style }}" >> output/video_info.txt
-        echo "Background Music: ${{ github.event.inputs.background_music }}" >> output/video_info.txt
-        echo "Generated at: $(date)" >> output/video_info.txt
-        
-        # Get video file size
-        if [ -f "output/optimized_video.mp4" ]; then
-            FILESIZE=$(stat -f%z "output/optimized_video.mp4" 2>/dev/null || stat -c%s "output/optimized_video.mp4")
-            echo "File Size: $(($FILESIZE / 1024 / 1024)) MB" >> output/video_info.txt
-        fi
-        
-    - name: Upload video artifacts
-      uses: actions/upload-artifact@v4
-      with:
-        name: generated-video-${{ github.run_id }}
-        path: |
-          output/optimized_video.mp4
-          output/thumbnail.jpg
-          output/video_info.txt
-        retention-days: 30
-        
-    - name: Create GitHub release with video
-      if: startsWith(github.ref, 'refs/tags/')
-      uses: softprops/action-gh-release@v1
-      with:
-        files: |
-          output/optimized_video.mp4
-          output/thumbnail.jpg
-          output/video_info.txt
-        body: |
-          # Text-to-Video Generation
-          
-          **Prompt:** ${{ github.event.inputs.text_prompt }}
-          
-          **Settings:**
-          - Duration: ${{ github.event.inputs.duration }} seconds
-          - Resolution: ${{ github.event.inputs.resolution }}
-          - Style: ${{ github.event.inputs.style }}
-          - Background Music: ${{ github.event.inputs.background_music }}
-          
-          Generated automatically using GitHub Actions.
-          
-    - name: Notify completion
-      run: |
-        echo "🎥 Video generation completed successfully!"
-        echo "📹 Video: output/optimized_video.mp4"
-        echo "🖼️ Thumbnail: output/thumbnail.jpg"
-        echo "📄 Info: output/video_info.txt"
-        echo ""
-        echo "Prompt: ${{ github.event.inputs.text_prompt }}"
-        
-    - name: Clean up large files
-      if: always()
-      run: |
-        rm -f output/temp_video.mp4
-        rm -f output/generated_video.mp4
-        
-  deploy-example:
-    runs-on: ubuntu-latest
-    needs: generate-video
-    if: always()
-    
-    steps:
-    - name: Download video artifacts
-      uses: actions/download-artifact@v4
-      with:
-        pattern: generated-video-*
-        path: downloaded-videos/
-        
-    - name: Display results
-      run: |
-        echo "=== Video Generation Results ==="
-        find downloaded-videos -type f -name "*.mp4" | while read file; do
-          echo "🎬 Generated: $file"
-        done
-        echo "================================"
