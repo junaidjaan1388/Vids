@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Text to Video Generator</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+
+        header {
+            background: linear-gradient(135deg, #ff6b6b, #ee5a24);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+
+        header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+
+        header p {
+            font-size: 1.1em;
+            opacity: 0.9;
+        }
+
+        main {
+            padding: 30px;
+        }
+
+        .form-group {
+            margin-bottom: 20px;
+        }
+
+        label {
+            display: block;
+            margin-bottom: 8px;
+            font-weight: 600;
+            color: #333;
+        }
+
+        input, select {
+            width: 100%;
+            padding: 12px 15px;
+            border: 2px solid #e0e0e0;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: all 0.3s ease;
+        }
+
+        input:focus, select:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        #textPrompt {
+            height: 100px;
+            resize: vertical;
+        }
+
+        .settings-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 15px;
+            margin-bottom: 25px;
+        }
+
+        .generate-btn {
+            width: 100%;
+            padding: 15px;
+            background: linear-gradient(135deg, #667eea, #764ba2);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            font-size: 18px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .generate-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(102, 126, 234, 0.3);
+        }
+
+        .generate-btn:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            display: none;
+        }
+
+        .spinner {
+            width: 50px;
+            height: 50px;
+            border: 5px solid #f3f3f3;
+            border-top: 5px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 20px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .result {
+            display: none;
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 25px;
+            margin-top: 20px;
+        }
+
+        .video-container {
+            text-align: center;
+            margin-bottom: 20px;
+        }
+
+        #generatedVideo {
+            max-width: 100%;
+            border-radius: 8px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+        }
+
+        .video-info {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 15px;
+        }
+
+        .download-btn {
+            display: inline-block;
+            padding: 12px 25px;
+            background: linear-gradient(135deg, #00b09b, #96c93d);
+            color: white;
+            text-decoration: none;
+            border-radius: 8px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+
+        .download-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 176, 155, 0.3);
+        }
+
+        .error {
+            display: none;
+            background: #ffe6e6;
+            color: #d63031;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            margin-top: 20px;
+        }
+
+        .status-updates {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            margin-top: 15px;
+            max-height: 200px;
+            overflow-y: auto;
+        }
+
+        .status-item {
+            padding: 8px 0;
+            border-bottom: 1px solid #f0f0f0;
+        }
+
+        .status-item:last-child {
+            border-bottom: none;
+        }
+
+        footer {
+            background: #f8f9fa;
+            padding: 20px 30px;
+            text-align: center;
+            color: #666;
+            border-top: 1px solid #e0e0e0;
+        }
+
+        @media (max-width: 768px) {
+            .settings-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            header h1 {
+                font-size: 2em;
+            }
+            
+            main {
+                padding: 20px 15px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🎬 Text to Video Generator</h1>
+            <p>Transform your text into amazing videos using GitHub Actions</p>
+        </header>
+
+        <main>
+            <div class="form-group">
+                <label for="textPrompt">Enter your text prompt:</label>
+                <textarea 
+                    id="textPrompt" 
+                    placeholder="Describe the video you want to create... (e.g., 'A beautiful sunset over mountains with flying birds')"
+                    required
+                ></textarea>
+            </div>
+
+            <div class="settings-grid">
+                <div class="form-group">
+                    <label for="duration">Duration (seconds):</label>
+                    <input type="number" id="duration" min="3" max="30" value="10">
+                </div>
+
+                <div class="form-group">
+                    <label for="resolution">Resolution:</label>
+                    <select id="resolution">
+                        <option value="640x480">640x480 (SD)</option>
+                        <option value="1280x720" selected>1280x720 (HD)</option>
+                        <option value="1920x1080">1920x1080 (Full HD)</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="style">Video Style:</label>
+                    <select id="style">
+                        <option value="animated_text">Animated Text</option>
+                        <option value="slideshow">Slideshow</option>
+                        <option value="ken_burns">Ken Burns Effect</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="githubToken">GitHub Token (optional):</label>
+                    <input 
+                        type="password" 
+                        id="githubToken" 
+                        placeholder="ghp_... (for private repos)"
+                    >
+                    <small style="color: #666; font-size: 12px;">Required only for private repositories</small>
+                </div>
+            </div>
+
+            <button id="generateBtn" class="generate-btn">Generate Video</button>
+
+            <div id="loading" class="loading">
+                <div class="spinner"></div>
+                <h3>Generating Your Video...</h3>
+                <p>This may take 1-2 minutes. Please wait.</p>
+                <div class="status-updates" id="statusUpdates">
+                    <div class="status-item">🚀 Starting video generation process...</div>
+                </div>
+            </div>
+
+            <div id="error" class="error">
+                <p>❌ Unable to generate video. Please try again.</p>
+            </div>
+
+            <div id="result" class="result">
+                <h3>✅ Video Generated Successfully!</h3>
+                <div class="video-container">
+                    <video id="generatedVideo" controls>
+                        Your browser does not support the video tag.
+                    </video>
+                </div>
+                <div class="video-info">
+                    <p><strong>Prompt:</strong> <span id="videoPrompt"></span></p>
+                    <p><strong>Duration:</strong> <span id="videoDuration"></span> seconds</p>
+                    <p><strong>Resolution:</strong> <span id="videoResolution"></span></p>
+                    <p><strong>Style:</strong> <span id="videoStyle"></span></p>
+                </div>
+                <div style="text-align: center;">
+                    <a id="downloadLink" class="download-btn" download="generated_video.mp4">
+                        📥 Download Video
+                    </a>
+                </div>
+            </div>
+        </main>
+
+        <footer>
+            <p>⚠️ For educational purposes. Videos are generated using GitHub Actions.</p>
+            <p>⏱️ Generation time: 1-2 minutes</p>
+        </footer>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
