@@ -51,6 +51,7 @@ jobs:
         sudo apt-get install -y ffmpeg
         sudo apt-get install -y libsm6 libxext6
         sudo apt-get install -y fonts-dejavu-core fonts-liberation
+        echo "✅ System dependencies installed"
       
     - name: Install Python packages
       run: |
@@ -58,113 +59,186 @@ jobs:
         pip install opencv-python-headless==4.8.1.78
         pip install Pillow==10.0.1
         pip install numpy==1.24.3
+        echo "✅ Python packages installed"
         
-    - name: Create simple video generation script
+    - name: Create video generation script
       run: |
         cat > generate_video.py << 'EOF'
         #!/usr/bin/env python3
         import cv2
         import numpy as np
         import os
+        import sys
         from PIL import Image, ImageDraw, ImageFont
         
         print("🚀 Starting video generation...")
         
-        # Get parameters from environment or use defaults
-        text_prompt = os.getenv('TEXT_PROMPT', 'Hello World')
-        duration = int(os.getenv('DURATION', '5'))
-        resolution = os.getenv('RESOLUTION', '640x480')
-        style = os.getenv('STYLE', 'animated_text')
+        def get_environment_variables():
+            """Get and validate environment variables"""
+            text_prompt = os.getenv('TEXT_PROMPT', 'Hello World')
+            duration = int(os.getenv('DURATION', '5'))
+            resolution = os.getenv('RESOLUTION', '640x480')
+            style = os.getenv('STYLE', 'animated_text')
+            
+            # Validate duration
+            duration = max(1, min(30, duration))  # Limit between 1-30 seconds
+            
+            print(f"📝 Prompt: {text_prompt}")
+            print(f"⏱️ Duration: {duration}s")
+            print(f"📐 Resolution: {resolution}")
+            print(f"🎨 Style: {style}")
+            
+            return text_prompt, duration, resolution, style
         
-        print(f"📝 Prompt: {text_prompt}")
-        print(f"⏱️ Duration: {duration}s")
-        print(f"📐 Resolution: {resolution}")
-        print(f"🎨 Style: {style}")
+        def parse_resolution(resolution_str):
+            """Parse resolution string to width and height"""
+            try:
+                width, height = map(int, resolution_str.split('x'))
+                return max(320, min(1920, width)), max(240, min(1080, height))  # Reasonable limits
+            except:
+                print("⚠️ Invalid resolution, using default 640x480")
+                return 640, 480
         
-        # Parse resolution
-        try:
-            width, height = map(int, resolution.split('x'))
-        except:
-            width, height = 640, 480
-            print("⚠️ Using default resolution 640x480")
-        
-        fps = 24
-        total_frames = duration * fps
-        
-        # Create output directory
-        os.makedirs('output', exist_ok=True)
-        
-        # Generate frames
-        frames = []
-        
-        for i in range(total_frames):
-            # Create a simple gradient background
-            progress = i / total_frames
+        def create_animated_frame(text, width, height, frame_num, total_frames):
+            """Create a single animated frame"""
+            progress = frame_num / total_frames
+            
+            # Dynamic background color
             r = int(100 + 100 * np.sin(progress * 2 * np.pi))
             g = int(100 + 100 * np.sin(progress * 2 * np.pi + 2))
             b = int(100 + 100 * np.sin(progress * 2 * np.pi + 4))
             
-            # Create image
+            # Create base image
             img = Image.new('RGB', (width, height), color=(r, g, b))
             draw = ImageDraw.Draw(img)
             
-            # Try to use a font
+            # Font setup with fallbacks
+            font_size = min(40, width // 15)
             try:
-                font_size = min(40, width // 20)
                 font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", font_size)
             except:
-                # Use default font if custom font fails
-                font = ImageFont.load_default()
-                font_size = 20
+                try:
+                    font = ImageFont.truetype("/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf", font_size)
+                except:
+                    font = ImageFont.load_default()
+                    print("⚠️ Using default font")
             
-            # Calculate text position
-            text_bbox = draw.textbbox((0, 0), text_prompt, font=font)
+            # Calculate text position with animation
+            text_bbox = draw.textbbox((0, 0), text, font=font)
             text_width = text_bbox[2] - text_bbox[0]
             text_height = text_bbox[3] - text_bbox[1]
             
             x = (width - text_width) // 2
             y = (height - text_height) // 2
             
-            # Add some animation
-            y_offset = int(20 * np.sin(i * 0.2))
+            # Animation effects
+            y_offset = int(20 * np.sin(frame_num * 0.2))
+            scale = 1.0 + 0.1 * np.sin(frame_num * 0.1)
             
-            # Draw text with shadow
-            draw.text((x+2, y+y_offset+2), text_prompt, font=font, fill=(0, 0, 0))
-            draw.text((x, y+y_offset), text_prompt, font=font, fill=(255, 255, 255))
+            # Draw text with shadow effect
+            shadow_offset = 3
+            draw.text((x + shadow_offset, y + y_offset + shadow_offset), text, font=font, fill=(0, 0, 0))
+            draw.text((x, y + y_offset), text, font=font, fill=(255, 255, 255))
             
-            # Add some decorative elements
-            for j in range(3):
-                circle_x = int(width * 0.2 * (j+1) + 30 * np.sin(i * 0.1 + j))
-                circle_y = int(height * 0.8 + 20 * np.cos(i * 0.1 + j))
-                circle_size = 15 + int(10 * np.sin(i * 0.05 + j))
+            # Add decorative elements
+            draw_decoration(draw, width, height, frame_num)
+            
+            return cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
+        
+        def draw_decoration(draw, width, height, frame_num):
+            """Add decorative elements to frame"""
+            # Animated circles
+            for j in range(5):
+                circle_x = int(width * 0.1 * (j+1) + 30 * np.sin(frame_num * 0.1 + j))
+                circle_y = int(height * 0.8 + 20 * np.cos(frame_num * 0.1 + j))
+                circle_size = 10 + int(8 * np.sin(frame_num * 0.05 + j))
+                color = (255, 200, 100 + j * 20)
                 draw.ellipse([
                     circle_x, circle_y, 
                     circle_x + circle_size, 
                     circle_y + circle_size
-                ], fill=(255, 200, 100))
+                ], fill=color)
             
-            # Convert to OpenCV format
-            frame = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
-            frames.append(frame)
+            # Progress bar at bottom
+            progress_width = int(width * 0.8)
+            progress_height = 10
+            progress_x = (width - progress_width) // 2
+            progress_y = height - 30
             
-            if i % 24 == 0:  # Print progress every second
-                print(f"📊 Generated {i}/{total_frames} frames ({i/total_frames*100:.1f}%)")
+            # Background bar
+            draw.rectangle([progress_x, progress_y, progress_x + progress_width, progress_y + progress_height], 
+                         fill=(100, 100, 100))
+            
+            # Animated progress
+            current_progress = (frame_num % 100) / 100.0
+            fill_width = int(progress_width * current_progress)
+            draw.rectangle([progress_x, progress_y, progress_x + fill_width, progress_y + progress_height], 
+                         fill=(0, 200, 255))
         
-        # Save video
-        output_path = 'output/generated_video.mp4'
-        fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+        def main():
+            try:
+                # Get configuration
+                text_prompt, duration, resolution, style = get_environment_variables()
+                width, height = parse_resolution(resolution)
+                
+                # Video settings
+                fps = 24
+                total_frames = duration * fps
+                
+                # Create output directory
+                os.makedirs('output', exist_ok=True)
+                output_path = 'output/generated_video.mp4'
+                
+                print(f"🎬 Generating {total_frames} frames at {fps} FPS")
+                print(f"💾 Output: {output_path}")
+                
+                # Initialize video writer
+                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+                
+                if not out.isOpened():
+                    print("❌ Failed to initialize video writer")
+                    return False
+                
+                # Generate frames
+                frames = []
+                for i in range(total_frames):
+                    frame = create_animated_frame(text_prompt, width, height, i, total_frames)
+                    frames.append(frame)
+                    out.write(frame)
+                    
+                    # Progress reporting
+                    if i % 24 == 0:  # Every second
+                        progress = (i + 1) / total_frames * 100
+                        print(f"📊 Progress: {i+1}/{total_frames} frames ({progress:.1f}%)")
+                
+                # Clean up
+                out.release()
+                
+                # Verify file was created
+                if os.path.exists(output_path) and os.path.getsize(output_path) > 0:
+                    file_size = os.path.getsize(output_path) / (1024 * 1024)
+                    print(f"✅ Video saved successfully: {output_path}")
+                    print(f"📁 File size: {file_size:.2f} MB")
+                    print(f"🎞️ Total frames: {len(frames)}")
+                    print("🎉 Video generation completed!")
+                    return True
+                else:
+                    print("❌ Video file was not created or is empty")
+                    return False
+                    
+            except Exception as e:
+                print(f"❌ Error during video generation: {str(e)}")
+                import traceback
+                traceback.print_exc()
+                return False
         
-        for frame in frames:
-            out.write(frame)
-        
-        out.release()
-        
-        print(f"✅ Video saved successfully: {output_path}")
-        print(f"📁 File size: {os.path.getsize(output_path) / (1024*1024):.2f} MB")
-        print(f"🎞️ Total frames: {len(frames)}")
-        print("🎉 Video generation completed!")
+        if __name__ == "__main__":
+            success = main()
+            sys.exit(0 if success else 1)
         EOF
+        
+        echo "✅ Video generation script created"
         
     - name: Set environment variables
       run: |
@@ -180,86 +254,129 @@ jobs:
         echo "DURATION: $DURATION"
         echo "RESOLUTION: $RESOLUTION"
         echo "STYLE: $STYLE"
+        echo "📁 Current directory: $(pwd)"
         
     - name: Generate video
       id: generate
       run: |
         echo "🎬 Starting video generation process..."
         python generate_video.py
+        if [ $? -eq 0 ]; then
+          echo "✅ Video generation completed successfully"
+          echo "success=true" >> $GITHUB_OUTPUT
+        else
+          echo "❌ Video generation failed"
+          echo "success=false" >> $GITHUB_OUTPUT
+          exit 1
+        fi
         
     - name: Verify video file
+      if: steps.generate.outputs.success == 'true'
       run: |
-        echo "🔍 Checking generated files..."
-        ls -la output/ || echo "No output directory"
+        echo "🔍 Verifying generated video..."
         
         if [ -f "output/generated_video.mp4" ]; then
           echo "✅ SUCCESS: Video file exists!"
           echo "📊 File size: $(du -h output/generated_video.mp4 | cut -f1)"
           echo "📁 File info: $(file output/generated_video.mp4)"
+          echo "🎬 Video details:"
+          ffprobe -v quiet -show_format -show_streams output/generated_video.mp4 | grep -E "(codec_type|width|height|duration|r_frame_rate)" || echo "Could not get video details"
         else
           echo "❌ FAILED: Video file was not generated"
           echo "📁 Current directory contents:"
           ls -la
-          echo "📁 Checking for any generated files:"
-          find . -name "*.mp4" -o -name "*.avi" -o -name "*.mov" | head -10
+          echo "📁 Output directory contents:"
+          ls -la output/ 2>/dev/null || echo "No output directory"
           exit 1
         fi
         
     - name: Create backup of original video
-      if: success()
+      if: steps.generate.outputs.success == 'true'
       run: |
         cp output/generated_video.mp4 output/original_video.mp4
         echo "📦 Backup created: output/original_video.mp4"
+        echo "📊 Backup size: $(du -h output/original_video.mp4 | cut -f1)"
         
     - name: Optimize video with FFmpeg
-      if: success()
+      if: steps.generate.outputs.success == 'true'
       run: |
-        echo "⚡ Optimizing video..."
+        echo "⚡ Optimizing video for web playback..."
         ffmpeg -i output/generated_video.mp4 \
           -c:v libx264 \
           -crf 23 \
-          -preset fast \
+          -preset medium \
           -movflags +faststart \
-          -y output/final_video.mp4
+          -pix_fmt yuv420p \
+          -y output/final_video.mp4 2>&1 | grep -E "(frame|size|time)" || echo "Optimization complete"
         
         echo "✅ Video optimized"
         echo "📊 Original size: $(du -h output/generated_video.mp4 | cut -f1)"
         echo "📊 Optimized size: $(du -h output/final_video.mp4 | cut -f1)"
         
     - name: Create thumbnail
-      if: success()
+      if: steps.generate.outputs.success == 'true'
       run: |
-        echo "🖼️ Creating thumbnail..."
+        echo "🖼️ Creating thumbnail from video..."
         ffmpeg -i output/final_video.mp4 \
           -ss 00:00:01 \
           -vframes 1 \
           -q:v 2 \
+          -vf "scale=320:-1" \
           -y output/thumbnail.jpg
         
-        echo "✅ Thumbnail created"
+        if [ -f "output/thumbnail.jpg" ]; then
+          echo "✅ Thumbnail created successfully"
+          echo "📊 Thumbnail size: $(du -h output/thumbnail.jpg | cut -f1)"
+        else
+          echo "⚠️ Thumbnail creation failed, but continuing..."
+        fi
         
-    - name: Generate report
-      if: success()
+    - name: Generate comprehensive report
+      if: steps.generate.outputs.success == 'true'
       run: |
-        echo "# 🎥 Video Generation Report" > output/README.md
-        echo "" >> output/README.md
-        echo "## Generation Details" >> output/README.md
-        echo "- **Prompt:** ${{ github.event.inputs.text_prompt }}" >> output/README.md
-        echo "- **Duration:** ${{ github.event.inputs.duration }} seconds" >> output/README.md
-        echo "- **Resolution:** ${{ github.event.inputs.resolution }}" >> output/README.md
-        echo "- **Style:** ${{ github.event.inputs.style }}" >> output/README.md
-        echo "- **Generated:** $(date)" >> output/README.md
-        echo "" >> output/README.md
-        echo "## Files" >> output/README.md
-        echo "1. `final_video.mp4` - Main video (optimized)" >> output/README.md
-        echo "2. `thumbnail.jpg` - Video thumbnail" >> output/README.md
-        echo "3. `original_video.mp4` - Original video (backup)" >> output/README.md
-        echo "" >> output/README.md
-        echo "---" >> output/README.md
-        echo "*Generated with GitHub Actions*" >> output/README.md
+        echo "📊 Generating detailed report..."
+        current_time=$(date)
+        original_size=$(du -h output/original_video.mp4 | cut -f1)
+        optimized_size=$(du -h output/final_video.mp4 | cut -f1)
+        thumbnail_size=$(du -h output/thumbnail.jpg 2>/dev/null | cut -f1 || echo "N/A")
+        
+        cat > output/README.md << EOF
+# 🎥 Video Generation Report
+
+## Generation Details
+- **Prompt:** ${{ github.event.inputs.text_prompt }}
+- **Duration:** ${{ github.event.inputs.duration }} seconds
+- **Resolution:** ${{ github.event.inputs.resolution }}
+- **Style:** ${{ github.event.inputs.style }}
+- **Generated:** $current_time
+- **Workflow Run:** ${{ github.run_number }}
+
+## Technical Information
+- **Original Size:** $original_size
+- **Optimized Size:** $optimized_size
+- **Thumbnail Size:** $thumbnail_size
+- **Compression Ratio:** $(echo "scale=2; $(du -b output/original_video.mp4 | cut -f1) / $(du -b output/final_video.mp4 | cut -f1)" | bc -l 2>/dev/null || echo "N/A")x
+
+## Files
+1. \`final_video.mp4\` - Main video (optimized for web)
+2. \`thumbnail.jpg\` - Video thumbnail
+3. \`original_video.mp4\` - Original video (backup)
+4. \`generated_video.mp4\` - Initial generated video
+
+## Usage
+- Download the artifact to get all files
+- Use \`final_video.mp4\` for sharing online
+- Use \`thumbnail.jpg\` as preview image
+
+---
+
+*Generated with GitHub Actions Text-to-Video Generator*
+EOF
+        
+        echo "✅ Report generated: output/README.md"
         
     - name: Upload artifacts
-      if: success()
+      if: steps.generate.outputs.success == 'true'
       uses: actions/upload-artifact@v4
       with:
         name: generated-video-${{ github.run_number }}
@@ -269,15 +386,16 @@ jobs:
           output/README.md
           output/original_video.mp4
         retention-days: 30
+        compression-level: 0
         
-    - name: Success message
-      if: success()
+    - name: Success notification
+      if: steps.generate.outputs.success == 'true'
       run: |
         echo ""
         echo "🎉 🎉 🎉 VIDEO GENERATION SUCCESSFUL! 🎉 🎉 🎉"
         echo "==========================================="
         echo ""
-        echo "📹 Your video has been generated and is ready to download!"
+        echo "📹 Your video has been generated and optimized!"
         echo ""
         echo "📋 Generation Details:"
         echo "   📝 Prompt: ${{ github.event.inputs.text_prompt }}"
@@ -285,33 +403,70 @@ jobs:
         echo "   📐 Resolution: ${{ github.event.inputs.resolution }}"
         echo "   🎨 Style: ${{ github.event.inputs.style }}"
         echo ""
-        echo "📥 Download:"
-        echo "   → Go to the 'Artifacts' section above"
-        echo "   → Download 'generated-video-${{ github.run_number }}'"
+        echo "📥 Download Instructions:"
+        echo "   1. Go to the 'Actions' tab in your repository"
+        echo "   2. Click on this workflow run"
+        echo "   3. Scroll down to the 'Artifacts' section"
+        echo "   4. Download 'generated-video-${{ github.run_number }}'"
         echo ""
-        echo "🔄 To create another video, simply run this workflow again!"
+        echo "🔄 To create another video:"
+        echo "   → Go to 'Actions' > 'Text to Video Generator'"
+        echo "   → Click 'Run workflow' with new parameters"
+        echo ""
         
-    - name: Debug on failure
+    - name: Comprehensive debug on failure
       if: failure()
       run: |
-        echo "🔧 DEBUG INFORMATION:"
-        echo "===================="
-        echo "Python version: $(python --version)"
-        echo "PIP list:"
-        pip list
+        echo "🔧 COMPREHENSIVE DEBUG INFORMATION"
+        echo "================================="
         echo ""
-        echo "Current directory: $(pwd)"
-        echo "Directory contents:"
+        echo "📋 System Information:"
+        echo "---------------------"
+        echo "OS: $(uname -a)"
+        echo "Python: $(python --version 2>&1 || echo 'Not available')"
+        echo "Current dir: $(pwd)"
+        echo ""
+        echo "📦 Package Information:"
+        echo "----------------------"
+        pip list 2>/dev/null | grep -E "(opencv|Pillow|numpy)" || echo "No relevant packages found"
+        echo ""
+        echo "🔍 File System Check:"
+        echo "-------------------"
+        echo "Current directory contents:"
         ls -la
         echo ""
-        echo "Output directory contents:"
-        ls -la output/ 2>/dev/null || echo "No output directory"
+        echo "Output directory:"
+        ls -la output/ 2>/dev/null || echo "No output directory found"
         echo ""
-        echo "FFmpeg version:"
-        ffmpeg -version 2>/dev/null || echo "FFmpeg not available"
+        echo "🛠️ Tool Verification:"
+        echo "-------------------"
+        echo "FFmpeg: $(ffmpeg -version 2>/dev/null | head -n1 || echo 'Not available')"
+        echo "FFprobe: $(ffprobe -version 2>/dev/null | head -n1 || echo 'Not available')"
         echo ""
-        echo "OpenCV check:"
-        python -c "import cv2; print(f'OpenCV version: {cv2.__version__}')" 2>/dev/null || echo "OpenCV import failed"
+        echo "🐍 Python Module Check:"
+        echo "---------------------"
+        python -c "
+        try:
+            import cv2
+            print(f'✅ OpenCV: {cv2.__version__}')
+        except Exception as e:
+            print(f'❌ OpenCV: {e}')
+        
+        try:
+            from PIL import Image, ImageDraw, ImageFont
+            print('✅ PIL: OK')
+        except Exception as e:
+            print(f'❌ PIL: {e}')
+        
+        try:
+            import numpy as np
+            print(f'✅ NumPy: {np.__version__}')
+        except Exception as e:
+            print(f'❌ NumPy: {e}')
+        " 2>/dev/null || echo "Python check failed"
         echo ""
-        echo "PIL check:"
-        python -c "from PIL import Image; print('PIL imported successfully')" 2>/dev/null || echo "PIL import failed"
+        echo "📁 Video Files Search:"
+        echo "---------------------"
+        find . -name "*.mp4" -o -name "*.avi" -o -name "*.mov" 2>/dev/null | head -10
+        echo ""
+        echo "🔚 End of Debug Information"
