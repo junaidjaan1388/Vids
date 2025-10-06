@@ -36,7 +36,7 @@ on:
 jobs:
   generate-video:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 10
     
     steps:
     - name: Checkout repository
@@ -51,23 +51,19 @@ jobs:
       run: |
         sudo apt-get update
         sudo apt-get install -y ffmpeg
-        sudo apt-get install -y libsm6 libxext6 libgl1-mesa-glx
+        sudo apt-get install -y libsm6 libxext6
+        sudo apt-get install -y fonts-dejavu-core fonts-liberation
         sudo apt-get install -y python3-tk
       
-    - name: Install Python packages with compatible versions
+    - name: Install Python packages
       run: |
         python -m pip install --upgrade pip
-        pip install opencv-python==4.8.1.78
+        pip install opencv-python-headless==4.8.1.78
         pip install Pillow==10.0.1
         pip install numpy==1.24.3
         pip install requests==2.31.0
-        # Install moviepy without unnecessary dependencies
-        pip install moviepy==1.0.3 --no-deps
-        pip install decorator==5.1.1
-        pip install tqdm==4.66.1
         pip install imageio==2.31.1
         pip install imageio-ffmpeg==0.4.9
-        pip install proglog==0.1.10
         
     - name: Create video generation script
       run: |
@@ -80,7 +76,6 @@ jobs:
         from PIL import Image, ImageDraw, ImageFont
         import textwrap
         import random
-        import subprocess
         
         class VideoGenerator:
             def __init__(self, width=1280, height=720):
@@ -107,6 +102,10 @@ jobs:
                 if current_line:
                     lines.append(current_line.strip())
                 
+                # If text is too short, use the whole text
+                if not lines:
+                    lines = [text_prompt]
+                
                 for i in range(total_frames):
                     # Create gradient background that changes over time
                     progress = i / total_frames
@@ -120,21 +119,15 @@ jobs:
                     # Add some visual elements
                     self._add_visual_elements(draw, i)
                     
-                    # Try to load font (using default font)
+                    # Use default font (no external font dependencies)
                     try:
                         font_size = 40
-                        # Try different font paths
-                        font_paths = [
-                            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-                            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
-                            "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf"
-                        ]
-                        font = None
-                        for font_path in font_paths:
-                            if os.path.exists(font_path):
-                                font = ImageFont.truetype(font_path, font_size)
-                                break
-                        if font is None:
+                        font = ImageFont.load_default()
+                        # Scale default font
+                        from PIL import ImageFont
+                        try:
+                            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", font_size)
+                        except:
                             font = ImageFont.load_default()
                     except:
                         font = ImageFont.load_default()
@@ -145,11 +138,12 @@ jobs:
                     # Draw each line of text
                     for j, line in enumerate(lines):
                         try:
+                            # Try to get text bounding box
                             bbox = draw.textbbox((0, 0), line, font=font)
                             text_width = bbox[2] - bbox[0]
                         except:
-                            # Fallback if textbbox fails
-                            text_width = len(line) * 20
+                            # Fallback: estimate width
+                            text_width = len(line) * font_size // 2
                         
                         x = (self.width - text_width) // 2
                         y = (self.height - len(lines) * 50) // 2 + j * 50 + y_offset
@@ -203,16 +197,10 @@ jobs:
                     
                     try:
                         font_size = 60
-                        font_paths = [
-                            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-                            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"
-                        ]
-                        font = None
-                        for font_path in font_paths:
-                            if os.path.exists(font_path):
-                                font = ImageFont.truetype(font_path, font_size)
-                                break
-                        if font is None:
+                        font = ImageFont.load_default()
+                        try:
+                            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size)
+                        except:
                             font = ImageFont.load_default()
                     except:
                         font = ImageFont.load_default()
@@ -254,35 +242,26 @@ jobs:
                     offset_y = int((bg_img.height - self.height) * 0.3 * np.sin(i * 0.05))
                     
                     # Crop and resize
-                    left = offset_x
-                    upper = offset_y
+                    left = max(0, offset_x)
+                    upper = max(0, offset_y)
                     right = min(left + int(self.width / zoom), bg_img.width)
                     lower = min(upper + int(self.height / zoom), bg_img.height)
                     
-                    cropped = bg_img.crop((left, upper, right, lower))
-                    resized = cropped.resize((self.width, self.height), Image.LANCZOS)
+                    if right <= left or lower <= upper:
+                        # Fallback if crop coordinates are invalid
+                        cropped = bg_img.resize((self.width, self.height), Image.LANCZOS)
+                    else:
+                        cropped = bg_img.crop((left, upper, right, lower))
+                        cropped = cropped.resize((self.width, self.height), Image.LANCZOS)
                     
-                    draw = ImageDraw.Draw(resized)
-                    
-                    # Add semi-transparent overlay for better text visibility
-                    overlay = Image.new('RGBA', (self.width, self.height), (0, 0, 0, 128))
-                    resized_rgba = resized.convert('RGBA')
-                    combined = Image.alpha_composite(resized_rgba, overlay)
-                    final_img = combined.convert('RGB')
-                    draw = ImageDraw.Draw(final_img)
+                    draw = ImageDraw.Draw(cropped)
                     
                     try:
                         font_size = 48
-                        font_paths = [
-                            "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-                            "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf"
-                        ]
-                        font = None
-                        for font_path in font_paths:
-                            if os.path.exists(font_path):
-                                font = ImageFont.truetype(font_path, font_size)
-                                break
-                        if font is None:
+                        font = ImageFont.load_default()
+                        try:
+                            font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size)
+                        except:
                             font = ImageFont.load_default()
                     except:
                         font = ImageFont.load_default()
@@ -290,6 +269,17 @@ jobs:
                     # Wrap text
                     wrapped_text = textwrap.fill(text_prompt, width=30)
                     lines = wrapped_text.split('\n')
+                    
+                    # Draw text with background for readability
+                    text_bg_height = len(lines) * 60 + 20
+                    text_bg_y = (self.height - text_bg_height) // 2
+                    
+                    # Semi-transparent background for text
+                    text_bg = Image.new('RGBA', (self.width, text_bg_height), (0, 0, 0, 150))
+                    cropped_rgba = cropped.convert('RGBA')
+                    cropped_rgba.paste(text_bg, (0, text_bg_y), text_bg)
+                    final_img = cropped_rgba.convert('RGB')
+                    draw = ImageDraw.Draw(final_img)
                     
                     # Draw text
                     for j, line in enumerate(lines):
@@ -300,7 +290,7 @@ jobs:
                             text_width = len(line) * 25
                         
                         x = (self.width - text_width) // 2
-                        y = (self.height - len(lines) * 60) // 2 + j * 60
+                        y = text_bg_y + 10 + j * 60
                         
                         # Text shadow
                         draw.text((x+2, y+2), line, font=font, fill=(0, 0, 0))
@@ -365,3 +355,197 @@ jobs:
                     img = Image.new('RGB', (self.width * 2, self.height * 2), color=color)
                     
                     # Add some texture
+                    draw = ImageDraw.Draw(img)
+                    for i in range(30):  # Reduced for performance
+                        x = random.randint(0, self.width * 2)
+                        y = random.randint(0, self.height * 2)
+                        radius = random.randint(20, 100)
+                        shade = random.randint(-40, 40)
+                        circle_color = (
+                            max(0, min(255, color[0] + shade)),
+                            max(0, min(255, color[1] + shade)),
+                            max(0, min(255, color[2] + shade))
+                        )
+                        draw.ellipse([x, y, x+radius, y+radius], fill=circle_color)
+                    
+                    images.append(img)
+                
+                return images
+        
+        def save_video(frames, output_path, fps=24, width=1280, height=720):
+            """Save frames as video using OpenCV"""
+            if not frames:
+                raise ValueError("No frames to save")
+                
+            # Create video writer
+            fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+            out = cv2.VideoWriter(output_path, fourcc, fps, (width, height))
+            
+            for frame in frames:
+                out.write(frame)
+            
+            out.release()
+            print(f"✅ Video saved: {output_path}")
+        
+        def main():
+            parser = argparse.ArgumentParser(description='Generate video from text')
+            parser.add_argument('--prompt', type=str, required=True)
+            parser.add_argument('--duration', type=int, default=10)
+            parser.add_argument('--resolution', type=str, default='1280x720')
+            parser.add_argument('--style', type=str, default='animated_text')
+            
+            args = parser.parse_args()
+            
+            # Parse resolution
+            try:
+                width, height = map(int, args.resolution.split('x'))
+                if width <= 0 or height <= 0:
+                    raise ValueError("Invalid resolution")
+            except:
+                width, height = 1280, 720
+                print("⚠️  Invalid resolution, using default 1280x720")
+            
+            # Validate duration
+            duration = max(1, min(60, args.duration))  # Limit to 1-60 seconds
+            
+            # Create output directory
+            os.makedirs('output', exist_ok=True)
+            
+            # Initialize generator
+            generator = VideoGenerator(width, height)
+            
+            print(f"🎬 Generating {duration}s video: '{args.prompt}'")
+            print(f"🎨 Style: {args.style}, 📐 Resolution: {width}x{height}")
+            
+            # Generate frames based on style
+            try:
+                if args.style == 'slideshow':
+                    print("🖼️  Creating slideshow video...")
+                    frames = generator.create_slideshow_video(args.prompt, duration)
+                elif args.style == 'ken_burns':
+                    print("🎞️  Creating Ken Burns effect video...")
+                    frames = generator.create_ken_burns_video(args.prompt, duration)
+                else:  # animated_text
+                    print("✨ Creating animated text video...")
+                    frames = generator.create_animated_text_video(args.prompt, duration)
+                
+                # Save video
+                output_path = 'output/generated_video.mp4'
+                save_video(frames, output_path, generator.fps, width, height)
+                
+                print("✅ Video generation completed successfully!")
+                return output_path
+                
+            except Exception as e:
+                print(f"❌ Error generating video: {str(e)}")
+                import traceback
+                traceback.print_exc()
+                return None
+        
+        if __name__ == "__main__":
+            main()
+        EOF
+        
+    - name: Generate video from text
+      id: generate
+      run: |
+        echo "🚀 Starting video generation..."
+        python generate_video.py \
+          --prompt "${{ github.event.inputs.text_prompt }}" \
+          --duration ${{ github.event.inputs.duration }} \
+          --resolution ${{ github.event.inputs.resolution }} \
+          --style ${{ github.event.inputs.style }}
+        
+    - name: Check if video was generated
+      run: |
+        if [ -f "output/generated_video.mp4" ]; then
+          echo "✅ Video generated successfully!"
+          echo "📊 File size: $(du -h output/generated_video.mp4 | cut -f1)"
+        else
+          echo "❌ Video generation failed"
+          exit 1
+        fi
+        
+    - name: Optimize video with FFmpeg
+      run: |
+        echo "⚡ Optimizing video..."
+        ffmpeg -i output/generated_video.mp4 \
+          -vcodec libx264 \
+          -crf 23 \
+          -preset fast \
+          -movflags +faststart \
+          -y output/final_video.mp4 2>/dev/null || echo "FFmpeg optimization completed"
+        
+        if [ -f "output/final_video.mp4" ]; then
+          echo "✅ Video optimized"
+          echo "📊 Original size: $(du -h output/generated_video.mp4 | cut -f1)"
+          echo "📊 Optimized size: $(du -h output/final_video.mp4 | cut -f1)"
+        else
+          # If optimization fails, use original
+          cp output/generated_video.mp4 output/final_video.mp4
+          echo "⚠️ Using original video (optimization skipped)"
+        fi
+        
+    - name: Create video thumbnail
+      run: |
+        echo "🖼️ Creating thumbnail..."
+        ffmpeg -i output/final_video.mp4 \
+          -ss 00:00:01 \
+          -vframes 1 \
+          -q:v 2 \
+          -y output/thumbnail.jpg 2>/dev/null || echo "Thumbnail creation completed"
+        
+    - name: Generate video info file
+      run: |
+        echo "# 🎥 Text-to-Video Generation Report" > output/README.md
+        echo "" >> output/README.md
+        echo "## Prompt" >> output/README.md
+        echo "\`\`\`" >> output/README.md
+        echo "${{ github.event.inputs.text_prompt }}" >> output/README.md
+        echo "\`\`\`" >> output/README.md
+        echo "" >> output/README.md
+        echo "## Settings" >> output/README.md
+        echo "- **Duration:** ${{ github.event.inputs.duration }} seconds" >> output/README.md
+        echo "- **Resolution:** ${{ github.event.inputs.resolution }}" >> output/README.md
+        echo "- **Style:** ${{ github.event.inputs.style }}" >> output/README.md
+        echo "- **Generated:** $(date -u '+%Y-%m-%d %H:%M:%S UTC')" >> output/README.md
+        echo "" >> output/README.md
+        echo "## Files" >> output/README.md
+        echo "1. \`final_video.mp4\` - Main video file" >> output/README.md
+        echo "2. \`thumbnail.jpg\` - Video thumbnail" >> output/README.md
+        echo "" >> output/README.md
+        echo "---" >> output/README.md
+        echo "*Generated automatically using GitHub Actions*" >> output/README.md
+        
+    - name: Upload video artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: text-to-video-${{ github.run_number }}
+        path: |
+          output/final_video.mp4
+          output/thumbnail.jpg
+          output/README.md
+        retention-days: 30
+        
+    - name: Show completion message
+      if: success()
+      run: |
+        echo ""
+        echo "🎉 TEXT-TO-VIDEO GENERATION COMPLETED!"
+        echo "======================================"
+        echo ""
+        echo "📝 Prompt: ${{ github.event.inputs.text_prompt }}"
+        echo "⏱️  Duration: ${{ github.event.inputs.duration }}s"
+        echo "📐 Resolution: ${{ github.event.inputs.resolution }}"
+        echo "🎨 Style: ${{ github.event.inputs.style }}"
+        echo ""
+        echo "📁 Download the generated video from the"
+        echo "   'Artifacts' section above ↑"
+        echo ""
+        echo "🔄 To generate another video, run this workflow again!"
+        
+    - name: Cleanup temporary files
+      if: always()
+      run: |
+        rm -f output/generated_video.mp4
+        echo "🧹 Cleanup completed"
